@@ -6,11 +6,20 @@ import com.getcapacitor.Plugin
 import com.getcapacitor.PluginCall
 import com.getcapacitor.PluginMethod
 import com.getcapacitor.annotation.CapacitorPlugin
+import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.Job
+import kotlinx.coroutines.SupervisorJob
+import kotlinx.coroutines.launch
 import me.didit.sdk.DiditSdk
+import me.didit.sdk.DiditSdkState
 import me.didit.sdk.VerificationResult
 
 @CapacitorPlugin(name = "DiditVerification")
 class DiditVerificationPlugin : Plugin() {
+
+    private val mainScope = CoroutineScope(SupervisorJob() + Dispatchers.Main)
+    private var stateJob: Job? = null
 
     @Volatile
     private var activeCallbackId: String? = null
@@ -20,6 +29,7 @@ class DiditVerificationPlugin : Plugin() {
     }
 
     override fun handleOnDestroy() {
+        stateJob?.cancel()
         activeCallbackId = null
     }
 
@@ -49,6 +59,8 @@ class DiditVerificationPlugin : Plugin() {
 
         currentActivity.runOnUiThread {
             DiditSdk.startVerification(token = sessionToken) { result ->
+                stateJob?.cancel()
+
                 // Clear the busy flag before the null-guard: a WebView reload
                 // resets the bridge and drops saved calls, and the guard must
                 // not leave the plugin permanently locked in that case.
@@ -72,6 +84,43 @@ class DiditVerificationPlugin : Plugin() {
                     }
                     is VerificationResult.Failed -> {
                         savedCall.reject(result.error.message ?: "Verification failed", "FAILED")
+                    }
+                }
+            }
+
+            // startVerification only prepares the session — unlike iOS, the
+            // Android SDK never shows its UI on its own. Watch the state flow
+            // and launch the UI once the session is ready.
+            var launched = false
+            stateJob?.cancel()
+            stateJob = mainScope.launch {
+                DiditSdk.state.collect { state ->
+                    when (state) {
+                        is DiditSdkState.Ready -> {
+                            if (!launched) {
+                                launched = true
+                                DiditSdk.launchVerificationUI(currentActivity)
+                            }
+                        }
+                        is DiditSdkState.Error -> {
+                            // Session preparation failed before the UI ever
+                            // launched (bad token, network error) — the result
+                            // callback won't fire, so settle the call here and
+                            // stop watching, otherwise a later Ready emission
+                            // could open the UI with no active call.
+                            if (!launched) {
+                                activeCallbackId = null
+                                val savedCall = bridge.getSavedCall(call.callbackId)
+                                if (savedCall != null) {
+                                    bridge.releaseCall(savedCall)
+                                    savedCall.reject(state.message, "FAILED")
+                                }
+                                stateJob?.cancel()
+                            }
+                        }
+                        else -> {
+                            // Idle / CreatingSession / Loading — keep waiting
+                        }
                     }
                 }
             }
