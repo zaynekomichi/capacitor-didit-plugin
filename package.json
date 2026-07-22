@@ -20,10 +20,10 @@
   "license": "MIT",
   "repository": {
     "type": "git",
-    "url": "git+https://github.com/aurora-systems/capacitor-didit-plugin.git"
+    "url": "git+https://github.com/zaynekomichi/capacitor-didit-plugin.git"
   },
   "bugs": {
-    "url": "https://github.com/aurora-systems/capacitor-didit-plugin/issues"
+    "url": "https://github.com/zaynekomichi/capacitor-didit-plugin/issues"
   },
   "keywords": [
     "capacitor",
